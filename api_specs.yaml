@@ -1,0 +1,344 @@
+openapi: 3.0.0
+info:
+  title: E-Commerce Master API
+  description: A complete production-ready API contract for a full-featured e-commerce platform.
+  version: 2.0.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.mystore.com/v1
+    description: Production Server
+security:
+  - bearerAuth: []
+
+paths:
+  # --- AUTHENTICATION ---
+  /auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register a new user
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegistration'
+      responses:
+        '201':
+          description: User created successfully.
+        '400':
+          description: Bad request
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Authenticate and receive token
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, example: "Bearer" }
+        '400':
+          description: Bad request
+
+  # --- PRODUCT CATALOG ---
+  /products:
+    get:
+      tags: [Products]
+      summary: Search and list products
+      operationId: listProducts
+      parameters:
+        - name: q
+          in: query
+          description: Keyword search
+          schema: { type: string }
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [price_asc, price_desc, newest] }
+      responses:
+        '200':
+          description: List of products
+          content:
+            application/json:
+              schema:
+                properties:
+                  count: { type: integer }
+                  products:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Product'
+        '400':
+          description: Bad request
+
+  /products/{id}:
+    get:
+      tags: [Products]
+      summary: Get detailed product info
+      operationId: getProductById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Product details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '400':
+          description: Bad request
+
+  # --- REVIEWS ---
+  /products/{id}/reviews:
+    get:
+      tags: [Reviews]
+      summary: View product reviews
+      operationId: listProductReviews
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Array of reviews
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Review'
+        '400':
+          description: Bad request
+    post:
+      tags: [Reviews]
+      security: [{ bearerAuth: [] }]
+      summary: Leave a review
+      operationId: addProductReview
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating, comment]
+              properties:
+                rating: { type: integer, minimum: 1, maximum: 5 }
+                comment: { type: string }
+      responses:
+        '201':
+          description: Review added.
+        '400':
+          description: Bad request
+
+  # --- CART ---
+  /cart:
+    get:
+      tags: [Cart]
+      security: [{ bearerAuth: [] }]
+      operationId: getCart
+      summary: Retrieve current cart
+      responses:
+        '200':
+          description: View current cart
+        '400':
+          description: Bad request
+    post:
+      tags: [Cart]
+      summary: Add product to cart
+      operationId: addProductToCart
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [product_id, quantity]
+              properties:
+                product_id: { type: string }
+                quantity: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Cart updated
+        '400':
+          description: Bad request
+
+  # --- WISHLIST ---
+  /wishlist:
+    get:
+      tags: [Wishlist]
+      security: [{ bearerAuth: [] }]
+      operationId: getWishlist
+      summary: Retrieve user's saved items
+      responses:
+        '200':
+          description: User's saved items
+        '400':
+          description: Bad request
+    post:
+      tags: [Wishlist]
+      security: [{ bearerAuth: [] }]
+      operationId: addToWishlist
+      summary: Add product to wishlist
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                product_id: { type: string }
+      responses:
+        '201':
+          description: Added to favorites
+        '400':
+          description: Bad request
+
+  # --- PROFILE ---
+  /profile:
+    get:
+      tags: [Profile]
+      security: [{ bearerAuth: [] }]
+      operationId: getUserProfile
+      summary: Retrieve user profile
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          description: Bad request
+  
+  /profile/addresses:
+    post:
+      tags: [Profile]
+      security: [{ bearerAuth: [] }]
+      operationId: addUserAddress
+      summary: Save a new address for the user
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Address'
+      responses:
+        '201':
+          description: Address saved
+        '400':
+          description: Bad request
+
+  # --- ORDERS ---
+  /orders:
+    get:
+      tags: [Orders]
+      summary: View order history
+      operationId: listOrders
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [PENDING, SHIPPED, DELIVERED, CANCELLED] }
+        - name: from_date
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: List of previous orders
+        '400':
+          description: Bad request
+    post:
+      tags: [Orders]
+      summary: Place order
+      operationId: createOrder
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address_id]
+              properties:
+                address_id: { type: string }
+      responses:
+        '201':
+          description: Order confirmed
+        '400':
+          description: Bad request
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    UserRegistration:
+      type: object
+      required: [email, password, full_name]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        full_name: { type: string }
+
+    UserProfile:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        full_name: { type: string }
+
+    Product:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        price: { type: number }
+        average_rating: { type: number }
+        category: { type: string }
+
+    Address:
+      type: object
+      required: [label, street, city, zip_code]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        street: { type: string }
+        city: { type: string }
+        zip_code: { type: string }
+
+    Review:
+      type: object
+      properties:
+        id: { type: string }
+        user_name: { type: string }
+        rating: { type: integer }
+        comment: { type: string }
+        created_at: { type: string, format: date-time }
