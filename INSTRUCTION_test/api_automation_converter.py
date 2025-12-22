@@ -6,6 +6,7 @@ import asyncio
 import time
 import argparse
 from pathlib import Path
+import os
 
 # ---------- Configuration ----------
 def get_spec_path() -> Path:
@@ -14,7 +15,7 @@ def get_spec_path() -> Path:
     If no argument is provided, defaults to ``api_specs.yaml`` in the current
     working directory.
     """
-    parser = argparse.ArgumentParser(description="Generate Playwright tests from an OpenAPI spec.")
+    parser = argparse.ArgumentParser(description="Generate tests from an OpenAPI spec.")
     parser.add_argument(
         "spec_file",
         nargs="?",
@@ -25,12 +26,85 @@ def get_spec_path() -> Path:
     return Path(args.spec_file)
 
 api_specs_path = get_spec_path()          # change to your spec file (JSON or YAML)
-output_dir = Path("generated_tests")            # folder that will contain one file per *route group*
-instruction_path = Path("api_automation_instruction.md")   # external prompt file
+# output_dir will be determined dynamically based on the detected language
+instruction_path = Path("INSTRUCTION_test/api_automation_instruction.md")   # external prompt file
 max_concurrency = 8                            # tune based on your hardware / Ollama limits
 # -----------------------------------
 
-# Ensure the output directory exists
+def detect_language_and_framework():
+    """Detect the programming language and framework from the api_* folder structure."""
+    # Get all items in current directory that start with "api_"
+    all_items = os.listdir(".")
+    api_folders = []
+    
+    for item in all_items:
+        if item.startswith("api_") and os.path.isdir(item):
+            api_folders.append(item)
+    
+    if not api_folders:
+        return "python", "requests"  # Default to Python and requests
+    
+    language = api_folders[0].replace("api_", "")
+    framework = "requests"  # Default framework for Python
+    
+    # Detect framework based on requirements.txt or other indicators
+    requirements_path = os.path.join(api_folders[0], "requirements.txt")
+    if os.path.exists(requirements_path):
+        with open(requirements_path, "r") as f:
+            requirements_content = f.read()
+            if "playwright" in requirements_content:
+                framework = "playwright"
+            elif "pytest" in requirements_content:
+                framework = "pytest"
+    
+    return language, framework
+
+language, framework = detect_language_and_framework()
+
+# Determine the correct output directory based on the detected language
+# Tests will be saved in the appropriate api_[language]/tests/ folder
+api_folder = f"api_{language}"
+tests_folder = Path(api_folder) / "tests"
+
+# Check if the expected test folder exists, if not search for common test folder patterns
+def find_test_folder():
+    """Search for test folders in common locations if the expected structure doesn't exist."""
+    # First check if the expected folder exists
+    if tests_folder.exists():
+        return tests_folder
+    
+    # Search for common test folder patterns
+    common_test_folders = [
+        "tests",
+        "test",
+        "spec",
+        "specs",
+        "test_suite",
+        "testing"
+    ]
+    
+    # Search in the api folder first
+    api_path = Path(api_folder)
+    if api_path.exists():
+        for test_dir in common_test_folders:
+            potential_folder = api_path / test_dir
+            if potential_folder.exists():
+                print(f"Found test folder at: {potential_folder}")
+                return potential_folder
+    
+    # Search in the root directory
+    for test_dir in common_test_folders:
+        potential_folder = Path(test_dir)
+        if potential_folder.exists():
+            print(f"Found test folder at: {potential_folder}")
+            return potential_folder
+    
+    # If no existing test folder found, create the default one
+    print(f"No existing test folder found, creating default at: {tests_folder}")
+    return tests_folder
+
+# Use the found or created test folder
+output_dir = find_test_folder()
 output_dir.mkdir(parents=True, exist_ok=True)
 
 # Load the instruction template once
@@ -99,6 +173,16 @@ def _sanitized_group_filename(group: str) -> str:
     safe = group.replace("{", "").replace("}", "").replace("-", "_")
     return f"test_{safe}.py"
 
+async def get_active_model() -> str:
+    """Fetch the current active model from the Llama server."""
+    try:
+        models = await client.models.list()
+        if models.data:
+            return models.data[0].id
+    except Exception as e:
+        print(f"Failed to fetch active model: {e}", file=sys.stderr)
+    return "gpt-oss:120b-cloud"
+
 async def generate_test_async(endpoint: str, method: str, operation: dict) -> str:
     """Async call to the LLM – returns the raw response string."""
     description = operation.get("description", "")
@@ -113,11 +197,14 @@ async def generate_test_async(endpoint: str, method: str, operation: dict) -> st
         .replace("{{request_body}}", json.dumps(request_body, indent=2))
         .replace("{{responses}}", json.dumps(responses, indent=2))
         .replace("{{base_url}}", get_base_url(spec))
+        .replace("{{framework}}", framework)
+        .replace("{{language}}", language)
     )
 
+    model = await get_active_model()
     try:
         resp = await client.chat.completions.create(
-            model="gpt-oss:120b-cloud",
+            model=model,
             messages=[
                 {"role": "system", "content": "You are an expert QA Engineer."},
                 {"role": "user", "content": prompt},
@@ -168,9 +255,9 @@ async def main():
         file_path = output_dir / filename
 
         file_contents = [
-            f"# Auto‑generated Playwright tests for group: {group}",
-            "import pytest",
-            "from playwright.sync_api import sync_playwright, expect",
+            f"# Auto‑generated tests for group: {group}",
+            f"# Language: {language}",
+            f"# Framework: {framework}",
             "",
         ]
 

@@ -25,6 +25,10 @@ project_root/
 │   ├── config/
 │   │   └── config.yaml            # Configuration file (e.g., base URLs, headers)
 │   │
+│   ├── reports/                   # Test reports
+│   │
+│   ├── .pytest_cache/             # Pytest cache
+│   │
 │   ├── requirements.txt           # Python dependencies
 │   │
 │   └── run_tests.py               # Script to run tests
@@ -179,7 +183,7 @@ Create a `run_tests.py` script inside the `api_python` folder to execute tests:
 import pytest
 
 if __name__ == "__main__":
-    pytest.main(["-v", "--html=reports/report.html"])
+    pytest.main(["-v", "--html=reports/report.html", "--cache-dir=.pytest_cache"])
 ```
 
 Run the tests:
@@ -199,10 +203,10 @@ Install `pytest-html` for HTML reports:
 pip install pytest-html -q
 ```
 
-Update `run_tests.py` to include the HTML report:
+Update `run_tests.py` to include the HTML report and cache directory:
 
 ```python
-pytest.main(["-v", "--html=reports/report.html"])
+pytest.main(["-v", "--html=reports/report.html", "--cache-dir=.pytest_cache"])
 ```
 
 ---
