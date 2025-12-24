@@ -15,3 +15,6 @@ pytest>=7.4.0
 
 # Additional dependencies for testing and development
 pytest>=7.0.0
+
+#google generative AI
+google-genai>=1.56.0

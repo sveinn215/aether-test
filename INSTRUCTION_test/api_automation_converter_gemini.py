@@ -1,4 +1,4 @@
-from openai import AsyncOpenAI   # <-- async client
+from google import genai
 import sys
 import json
 import yaml
@@ -29,18 +29,13 @@ def get_spec_path() -> Path:
 api_specs_path = get_spec_path()          # change to your spec file (JSON or YAML)
 # output_dir will be determined dynamically based on the detected language
 instruction_path = Path("INSTRUCTION_test/api_automation_instruction.md")   # external prompt file
-max_concurrency = 8                            # tune based on your hardware / Ollama limits
+max_concurrency = 8                            # tune based on your hardware and API rate limits
 # -----------------------------------
 
 def detect_language_and_framework():
     """Detect the programming language and framework from the api_* folder structure."""
-    # Get all items in current directory that start with "api_"
     all_items = os.listdir(".")
-    api_folders = []
-    
-    for item in all_items:
-        if item.startswith("api_") and os.path.isdir(item):
-            api_folders.append(item)
+    api_folders = [item for item in all_items if item.startswith("api_") and os.path.isdir(item)]
     
     if not api_folders:
         return "python", "requests"  # Default to Python and requests
@@ -48,7 +43,6 @@ def detect_language_and_framework():
     language = api_folders[0].replace("api_", "")
     framework = "requests"  # Default framework for Python
     
-    # Detect framework based on requirements.txt or other indicators
     requirements_path = os.path.join(api_folders[0], "requirements.txt")
     if os.path.exists(requirements_path):
         with open(requirements_path, "r") as f:
@@ -57,34 +51,22 @@ def detect_language_and_framework():
                 framework = "playwright"
             elif "pytest" in requirements_content:
                 framework = "pytest"
-    
+
     return language, framework
 
 language, framework = detect_language_and_framework()
 
 # Determine the correct output directory based on the detected language
-# Tests will be saved in the appropriate api_[language]/tests/ folder
 api_folder = f"api_{language}"
 tests_folder = Path(api_folder) / "tests"
 
-# Check if the expected test folder exists, if not search for common test folder patterns
 def find_test_folder():
     """Search for test folders in common locations if the expected structure doesn't exist."""
-    # First check if the expected folder exists
     if tests_folder.exists():
         return tests_folder
     
-    # Search for common test folder patterns
-    common_test_folders = [
-        "tests",
-        "test",
-        "spec",
-        "specs",
-        "test_suite",
-        "testing"
-    ]
+    common_test_folders = ["tests", "test", "spec", "specs", "test_suite", "testing"]
     
-    # Search in the api folder first
     api_path = Path(api_folder)
     if api_path.exists():
         for test_dir in common_test_folders:
@@ -93,29 +75,24 @@ def find_test_folder():
                 print(f"Found test folder at: {potential_folder}")
                 return potential_folder
     
-    # Search in the root directory
     for test_dir in common_test_folders:
         potential_folder = Path(test_dir)
         if potential_folder.exists():
             print(f"Found test folder at: {potential_folder}")
             return potential_folder
     
-    # If no existing test folder found, create the default one
     print(f"No existing test folder found, creating default at: {tests_folder}")
     return tests_folder
 
-# Use the found or created test folder
 output_dir = find_test_folder()
 output_dir.mkdir(parents=True, exist_ok=True)
 
-# Load the instruction template once
 try:
     instruction_template = instruction_path.read_text(encoding="utf-8")
 except Exception as exc:
     print(f"Failed to read instruction file '{instruction_path}': {exc}", file=sys.stderr)
     sys.exit(1)
 
-# Load OpenAPI spec (JSON or YAML)
 def load_spec(path: Path):
     try:
         if path.suffix.lower() in {".yaml", ".yml"}:
@@ -128,29 +105,36 @@ def load_spec(path: Path):
         print(f"Failed to load spec: {exc}", file=sys.stderr)
         sys.exit(1)
 
-
 def get_base_url(spec: dict) -> str:
     """Extract the base URL from the OpenAPI spec, prioritizing staging servers."""
     servers = spec.get("servers", [])
     if not servers:
-        return "http://localhost:3000"  # Default fallback
+        return "http://localhost:3000"
     
-    # Prioritize staging server if available
     for server in servers:
         server_url = server.get("url", "")
         if "staging" in server_url.lower():
             return server_url
     
-    # Fall back to the first available server
     return servers[0].get("url", "http://localhost:3000")
 
 spec = load_spec(api_specs_path)
 
-# Initialise async Ollama‑compatible OpenAI client
-client = AsyncOpenAI(
-    base_url="http://localhost:11434/v1",
-    api_key="does-not-matter",
-)
+# --- Gemini API Configuration ---
+# Make sure to set the GEMINI_API_KEY environment variable before running the script
+# Example: export GEMINI_API_KEY='your-api-key'
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+if not gemini_api_key:
+    print("Error: The GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
+    sys.exit(1)
+
+genai.configure(api_key=gemini_api_key)
+
+# Initialize the Gemini model
+# You can change the model name to your preferred version (e.g., 'gemini-1.5-pro')
+model = genai.GenerativeModel('gemini-1.5-flash')
+# --- End of Gemini Configuration ---
+
 
 def clean_snippet(snippet: str) -> str:
     """
@@ -187,28 +171,12 @@ def _sanitized_group_filename(group: str) -> str:
     safe = group.replace("{", "").replace("}", "").replace("-", "_")
     return f"test_{safe}.py"
 
-async def get_active_model() -> str:
-    """Fetch the current active model from the Llama server."""
-    try:
-        models = await client.models.list()
-        if models.data:
-            return models.data[0].id
-    except Exception as e:
-        print(f"Failed to fetch active model: {e}", file=sys.stderr)
-    return "gpt-oss:120b-cloud"
-
 async def generate_test_async(endpoint: str, method: str, operation: dict) -> str:
-    """Async call to the LLM using the non‑chat Completion API.
-
-    The original implementation used ``client.chat.completions.create`` which is being
-    deprecated. This version builds a single prompt that includes the system role
-    instruction and calls ``client.completions.create`` instead.
-    """
+    """Async call to the Gemini LLM."""
     description = operation.get("description", "")
     request_body = operation.get("requestBody", {})
     responses = operation.get("responses", {})
 
-    # Build the full prompt by prepending the system message used previously.
     full_prompt = (
         "You are an expert QA Engineer.\n\n"
         + instruction_template
@@ -222,19 +190,10 @@ async def generate_test_async(endpoint: str, method: str, operation: dict) -> st
         .replace("{{language}}", language)
     )
 
-    model = await get_active_model()
     try:
-        # Use the Responses API (POST /v1/responses) instead of the deprecated
-        # Completion endpoint. ``input`` holds the full prompt, and the response
-        # object provides ``output_text`` for easy access to the generated content.
-        resp = await client.responses.create(
-            model=model,
-            input=full_prompt,
-            temperature=0.6,
-        )
-        # The ``Response`` model exposes ``output_text`` which aggregates the
-        # generated text. Strip any surrounding whitespace before returning.
-        return getattr(resp, "output_text", "").strip()
+        # Generate content using the Gemini model
+        response = await model.generate_content_async(full_prompt)
+        return response.text.strip()
     except Exception as e:
         print(f"LLM error for {method.upper()} {endpoint}: {e}", file=sys.stderr)
         return f"# Failed to generate test for {method.upper()} {endpoint}: {e}"
@@ -250,29 +209,21 @@ async def _worker(semaphore: asyncio.Semaphore, route: str, method: str, operati
 async def main():
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    # Extract base URL from the spec
-    base_url = get_base_url(spec)
-
-    # Build a flat list of tasks (one per endpoint/method)
     tasks = [
         _worker(semaphore, route, method, operation)
         for route, methods in spec.get("paths", {}).items()
         for method, operation in methods.items()
     ]
 
-    # Run all LLM calls concurrently
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Aggregate cleaned snippets by group
     tests_by_group: dict[str, list[str]] = {}
     for result in results:
         if isinstance(result, Exception):
-            # Already logged inside generate_test_async; just skip
             continue
         group, cleaned_code = result
         tests_by_group.setdefault(group, []).append(cleaned_code)
 
-    # ---------- Write one file per group ----------
     for group, snippets in tests_by_group.items():
         filename = _sanitized_group_filename(group)
         file_path = output_dir / filename
@@ -286,7 +237,7 @@ async def main():
 
         for snippet in snippets:
             file_contents.append(snippet)
-            file_contents.append("")   # blank line between tests
+            file_contents.append("")
 
         try:
             file_path.write_text("\n".join(file_contents), encoding="utf-8")
@@ -294,7 +245,6 @@ async def main():
         except Exception as e:
             print(f"Failed to write {file_path}: {e}", file=sys.stderr)
 
-# Run the async main entry‑point
 if __name__ == "__main__":
     start_time = time.time()
     asyncio.run(main())
