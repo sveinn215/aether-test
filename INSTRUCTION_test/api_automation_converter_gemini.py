@@ -1,4 +1,4 @@
-from google import genai
+from google.genai import Client
 import sys
 import json
 import yaml
@@ -121,19 +121,19 @@ def get_base_url(spec: dict) -> str:
 spec = load_spec(api_specs_path)
 
 # --- Gemini API Configuration ---
-# Make sure to set the GEMINI_API_KEY environment variable before running the script
-# Example: export GEMINI_API_KEY='your-api-key'
-gemini_api_key = os.getenv("GEMINI_API_KEY")
-if not gemini_api_key:
-    print("Error: The GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
+# The google-genai library automatically uses the GOOGLE_API_KEY environment variable.
+# For backward compatibility, this script also checks for GEMINI_API_KEY.
+# Make sure one of these environment variables is set before running the script.
+# Example: export GOOGLE_API_KEY='your-api-key'
+api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+if not api_key:
+    print(
+        "Error: The GOOGLE_API_KEY or GEMINI_API_KEY environment variable is not set.",
+        file=sys.stderr,
+    )
     sys.exit(1)
-
-genai.configure(api_key=gemini_api_key)
-
-# Initialize the Gemini model
-# You can change the model name to your preferred version (e.g., 'gemini-1.5-pro')
-model = genai.GenerativeModel('gemini-1.5-flash')
-# --- End of Gemini Configuration ---
+client = Client(api_key=api_key).aio
+model = 'gemma-3-27b-it'  # or another available Gemini model;
 
 
 def clean_snippet(snippet: str) -> str:
@@ -192,7 +192,7 @@ async def generate_test_async(endpoint: str, method: str, operation: dict) -> st
 
     try:
         # Generate content using the Gemini model
-        response = await model.generate_content_async(full_prompt)
+        response = await client.models.generate_content(model=model,contents=full_prompt)
         return response.text.strip()
     except Exception as e:
         print(f"LLM error for {method.upper()} {endpoint}: {e}", file=sys.stderr)
